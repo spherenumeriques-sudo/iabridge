@@ -6,7 +6,11 @@ import time
 import traceback
 import logging
 import random
+import json
+import threading
+from pathlib import Path
 from functools import wraps
+from urllib.parse import urlparse
 
 from flask import Flask, request, jsonify
 import mss
@@ -43,6 +47,32 @@ def get_scale_factor():
     return phys_w / logical_w, phys_h / logical_h
 
 SCALE_X, SCALE_Y = get_scale_factor()
+
+# ---------------------------------------------------------------------------
+# UI Map — chargé au démarrage depuis ui_map.json (même dossier que ce script)
+# ---------------------------------------------------------------------------
+_UI_MAP_PATH = Path(__file__).parent / "ui_map.json"
+UI_MAP: dict = {}
+_UI_MAP_LOCK = threading.Lock()
+
+def load_ui_map():
+    global UI_MAP
+    if not _UI_MAP_PATH.exists():
+        logger.warning("ui_map.json not found — UI map empty")
+        return
+    try:
+        with open(_UI_MAP_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        with _UI_MAP_LOCK:
+            UI_MAP = data
+        logger.info("UI map loaded from %s", _UI_MAP_PATH)
+    except json.JSONDecodeError as e:
+        logger.error("ui_map.json is malformed — %s", e)
+    except Exception as e:
+        logger.error("Failed to load ui_map.json — %s", e)
+
+load_ui_map()
+
 
 def to_logical(x, y):
     return int(x / SCALE_X), int(y / SCALE_Y)
@@ -106,6 +136,69 @@ def health():
         return jsonify({"status": "ok", "screen": f"{phys_w}x{phys_h}", "logical": f"{log_w}x{log_h}", "scale": {"x": SCALE_X, "y": SCALE_Y}})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+@app.route("/ui-map", methods=["GET"])
+@require_auth
+def get_ui_map():
+    """Return the loaded UI map."""
+    return jsonify({"status": "ok", "ui_map": UI_MAP})
+
+
+@app.route("/ui-map/reload", methods=["POST"])
+@require_auth
+def reload_ui_map():
+    """Reload ui_map.json from disk (POST — mutative action)."""
+    load_ui_map()
+    with _UI_MAP_LOCK:
+        keys = list(UI_MAP.keys())
+    return jsonify({"status": "ok", "keys": keys})
+
+
+@app.route("/navigate", methods=["POST"])
+@require_auth
+def navigate():
+    """Navigate to a URL in the active browser using the address bar from ui_map.
+    Body: {"url": "https://...", "browser": "opera" (default) | "chrome"}
+    """
+    try:
+        data = request.get_json(force=True)
+        url = data["url"]
+        browser = data.get("browser", "opera")
+
+        bar = UI_MAP.get("browsers", {}).get(browser, {}).get("window", {}).get("address_bar", {})
+        if not bar:
+            return jsonify({"error": f"Browser '{browser}' not in ui_map"}), 400
+
+        # Validate URL
+        parsed = urlparse(url)
+        if not parsed.scheme or not parsed.netloc:
+            return jsonify({"error": "Invalid URL — must include scheme (https://)"}), 400
+        if len(url) > 2048:
+            return jsonify({"error": "URL too long (max 2048 chars)"}), 400
+
+        bx, by = bar["x"], bar["y"]
+        human_move(bx, by, jitter=0)
+        time.sleep(random.uniform(0.05, 0.1))
+        pyautogui.click(button="left")
+        time.sleep(0.2)
+        pyautogui.hotkey("ctrl", "a")
+        time.sleep(0.1)
+        old_clip = pyperclip.paste()
+        try:
+            pyperclip.copy(url)
+            pyautogui.hotkey("ctrl", "v")
+            time.sleep(0.3)
+            pyautogui.press("Return")
+        finally:
+            pyperclip.copy(old_clip)
+        logger.info("navigate browser=%s url=%s", browser, url)
+        return jsonify({"status": "ok", "url": url, "browser": browser})
+    except KeyError as e:
+        return jsonify({"error": f"Missing field: {e}"}), 400
+    except Exception as e:
+        logger.error("Navigate failed: %s", e)
+        return jsonify({"error": str(e)}), 500
+
 
 @app.route("/refresh-scale", methods=["GET"])
 @require_auth
@@ -176,6 +269,28 @@ def click():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/doubleclick", methods=["POST"])
+@require_auth
+def doubleclick():
+    """Double-click at position (two clicks within 150ms).
+    Body: {"x": int, "y": int, "jitter": int (optional, default 2)}
+    """
+    try:
+        data = request.get_json(force=True)
+        x, y = int(data["x"]), int(data["y"])
+        jitter = data.get("jitter", 2)
+        lx, ly = human_move(x, y, jitter=jitter)
+        time.sleep(random.uniform(0.05, 0.1))
+        pyautogui.doubleClick()  # no coords — mouse already at target
+        logger.info("doubleclick at physical(%d,%d) logical(%d,%d)", x, y, lx, ly)
+        return jsonify({"status": "ok", "x": x, "y": y, "logical_x": lx, "logical_y": ly})
+    except KeyError as e:
+        return jsonify({"error": f"Missing field: {e}"}), 400
+    except Exception as e:
+        logger.error("Doubleclick failed: %s", e)
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/move", methods=["POST"])
 @require_auth
 def move():
@@ -231,10 +346,12 @@ def type_text():
         data = request.get_json(force=True)
         text = data["text"]
         old_clip = pyperclip.paste()
-        pyperclip.copy(text)
-        pyautogui.hotkey("ctrl", "v")
-        time.sleep(0.3)
-        pyperclip.copy(old_clip)
+        try:
+            pyperclip.copy(text)
+            pyautogui.hotkey("ctrl", "v")
+            time.sleep(0.3)
+        finally:
+            pyperclip.copy(old_clip)
         logger.info("type length=%d", len(text))
         return jsonify({"status": "ok", "length": len(text)})
     except KeyError as e:
