@@ -1,0 +1,5 @@
+flask
+mss
+pyautogui
+pyperclip
+pillow
