@@ -1,0 +1,325 @@
+#!/usr/bin/env python3
+"""
+IABridge CLI — client simple pour piloter l'agent Windows via le gateway local.
+
+Usage :
+    iabridge health
+    iabridge screenshot [--format jpeg|png] [--quality 80] [--save out.jpg]
+    iabridge click X Y [--button left|right|middle] [--double]
+    iabridge move X Y
+    iabridge drag X1 Y1 X2 Y2
+    iabridge scroll [--x X --y Y] [--clicks -3]
+    iabridge type "texte à taper"
+    iabridge key "ctrl+c"
+    iabridge clipboard get
+    iabridge clipboard set "nouveau texte"
+    iabridge ls "C:\\chemin\\dossier"
+    iabridge cat "C:\\chemin\\fichier.txt" [--binary]
+    iabridge write "C:\\out.txt" "contenu"
+    iabridge rm "C:\\chemin" [--recursive]
+    iabridge mv SRC DST
+    iabridge cp SRC DST
+    iabridge run "commande shell"
+    iabridge raw '{"action": "...", ...}'
+"""
+import argparse
+import base64
+import json
+import os
+import sys
+from pathlib import Path
+from urllib import request as urlreq
+from urllib.error import HTTPError, URLError
+
+
+def load_config() -> dict:
+    """Charge URL et token du gateway local.
+
+    Priorité : env vars > ~/.config/iabridge/cli.json > défauts
+    """
+    cfg_file = Path.home() / ".config" / "iabridge" / "cli.json"
+    cfg = {"url": "http://127.0.0.1:9998", "token": ""}
+    if cfg_file.exists():
+        cfg.update(json.loads(cfg_file.read_text()))
+    if os.environ.get("IABRIDGE_URL"):
+        cfg["url"] = os.environ["IABRIDGE_URL"]
+    if os.environ.get("IABRIDGE_TOKEN"):
+        cfg["token"] = os.environ["IABRIDGE_TOKEN"]
+    if not cfg["token"]:
+        # Fallback : lire le token du gateway directement (même machine)
+        token_file = Path.home() / ".config" / "iabridge" / "token"
+        if token_file.exists():
+            cfg["token"] = token_file.read_text().strip()
+    return cfg
+
+
+def call(action: str, **params) -> dict:
+    cfg = load_config()
+    if not cfg["token"]:
+        print("Erreur : aucun token. Positionne IABRIDGE_TOKEN ou ~/.config/iabridge/token", file=sys.stderr)
+        sys.exit(2)
+    body = json.dumps({"action": action, **params}).encode("utf-8")
+    if action == "cmd":
+        url = cfg["url"] + "/cmd"
+    else:
+        url = cfg["url"] + "/cmd"
+    req = urlreq.Request(url, data=body, method="POST")
+    req.add_header("Content-Type", "application/json")
+    req.add_header("Authorization", f"Bearer {cfg['token']}")
+    try:
+        with urlreq.urlopen(req, timeout=60) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except HTTPError as e:
+        try:
+            detail = json.loads(e.read().decode("utf-8"))
+        except Exception:
+            detail = {"error": str(e)}
+        print(f"HTTP {e.code} : {detail}", file=sys.stderr)
+        sys.exit(3)
+    except URLError as e:
+        print(f"Connexion au gateway impossible : {e}", file=sys.stderr)
+        sys.exit(4)
+
+
+def health_cmd(args) -> None:
+    cfg = load_config()
+    url = cfg["url"] + "/health"
+    try:
+        with urlreq.urlopen(url, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception as e:
+        print(f"Gateway injoignable : {e}", file=sys.stderr)
+        sys.exit(4)
+    print(json.dumps(data, indent=2))
+    if not data.get("agent_connected"):
+        print("\n⚠ Aucun agent connecté. Lance l'agent sur ton PC Windows.", file=sys.stderr)
+        sys.exit(5)
+    print()
+    # Ping agent
+    agent_health = call("health")
+    print(json.dumps(agent_health, indent=2))
+
+
+def screenshot_cmd(args) -> None:
+    params = {"format": args.format, "quality": args.quality}
+    if args.region:
+        x, y, w, h = [int(v) for v in args.region.split(",")]
+        params["region"] = {"x": x, "y": y, "w": w, "h": h}
+    result = call("screenshot", **params)
+    if "error" in result:
+        print(json.dumps(result, indent=2), file=sys.stderr)
+        sys.exit(6)
+    data = base64.b64decode(result["image"])
+    if args.save:
+        out = Path(args.save)
+    else:
+        ext = result.get("format", "jpeg")
+        out = Path(f"/tmp/iabridge_screenshot.{ext}")
+    out.write_bytes(data)
+    print(f"{out} — {result['width']}x{result['height']} ({len(data)} octets)")
+
+
+def click_cmd(args) -> None:
+    action = "doubleclick" if args.double else "click"
+    result = call(action, x=args.x, y=args.y, button=args.button)
+    print(json.dumps(result, indent=2))
+
+
+def move_cmd(args) -> None:
+    print(json.dumps(call("move", x=args.x, y=args.y), indent=2))
+
+
+def drag_cmd(args) -> None:
+    print(json.dumps(call("drag", x1=args.x1, y1=args.y1, x2=args.x2, y2=args.y2), indent=2))
+
+
+def scroll_cmd(args) -> None:
+    params = {"clicks": args.clicks}
+    if args.x is not None and args.y is not None:
+        params["x"] = args.x
+        params["y"] = args.y
+    print(json.dumps(call("scroll", **params), indent=2))
+
+
+def type_cmd(args) -> None:
+    print(json.dumps(call("type", text=args.text), indent=2))
+
+
+def key_cmd(args) -> None:
+    print(json.dumps(call("key", key=args.key), indent=2))
+
+
+def clipboard_cmd(args) -> None:
+    if args.op == "get":
+        r = call("clipboard_get")
+        print(r.get("text", ""))
+    else:
+        print(json.dumps(call("clipboard_set", text=args.text), indent=2))
+
+
+def ls_cmd(args) -> None:
+    r = call("list_dir", path=args.path)
+    if "error" in r:
+        print(json.dumps(r, indent=2), file=sys.stderr)
+        sys.exit(6)
+    for e in r.get("entries", []):
+        if "error" in e:
+            print(f"  ? {e['name']}  ({e['error']})")
+            continue
+        marker = "/" if e["is_dir"] else " "
+        size = "-" if e["size"] is None else f"{e['size']:>10d}"
+        print(f"{marker} {size}  {e['name']}")
+    print(f"\n{r['count']} entrée(s) — {r['path']}")
+
+
+def cat_cmd(args) -> None:
+    r = call("read_file", path=args.path, binary=args.binary)
+    if "error" in r:
+        print(json.dumps(r, indent=2), file=sys.stderr)
+        sys.exit(6)
+    if "content" in r:
+        sys.stdout.write(r["content"])
+    elif "content_b64" in r:
+        sys.stdout.buffer.write(base64.b64decode(r["content_b64"]))
+
+
+def write_cmd(args) -> None:
+    params = {"path": args.path}
+    if args.from_stdin:
+        params["content"] = sys.stdin.read()
+    else:
+        params["content"] = args.content or ""
+    print(json.dumps(call("write_file", **params), indent=2))
+
+
+def rm_cmd(args) -> None:
+    print(json.dumps(call("delete", path=args.path, recursive=args.recursive), indent=2))
+
+
+def mv_cmd(args) -> None:
+    print(json.dumps(call("fs_move", src=args.src, dst=args.dst), indent=2))
+
+
+def cp_cmd(args) -> None:
+    print(json.dumps(call("copy", src=args.src, dst=args.dst), indent=2))
+
+
+def run_cmd(args) -> None:
+    r = call("run", command=args.command, timeout=args.timeout)
+    if "error" in r:
+        print(json.dumps(r, indent=2), file=sys.stderr)
+        sys.exit(6)
+    sys.stdout.write(r.get("stdout", ""))
+    if r.get("stderr"):
+        sys.stderr.write(r["stderr"])
+    sys.exit(r.get("returncode", 0))
+
+
+def raw_cmd(args) -> None:
+    try:
+        payload = json.loads(args.json)
+    except json.JSONDecodeError as e:
+        print(f"JSON invalide : {e}", file=sys.stderr)
+        sys.exit(2)
+    if "action" not in payload:
+        print("Le JSON doit avoir un champ 'action'", file=sys.stderr)
+        sys.exit(2)
+    print(json.dumps(call(**payload), indent=2))
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="iabridge", description="Client IABridge v3")
+    sub = p.add_subparsers(dest="command", required=True)
+
+    sub.add_parser("health", help="statut gateway + agent").set_defaults(func=health_cmd)
+
+    s = sub.add_parser("screenshot", help="capturer l'écran")
+    s.add_argument("--format", default="jpeg", choices=["jpeg", "png"])
+    s.add_argument("--quality", type=int, default=80)
+    s.add_argument("--region", help="x,y,w,h")
+    s.add_argument("--save", help="chemin de sortie")
+    s.set_defaults(func=screenshot_cmd)
+
+    s = sub.add_parser("click", help="clic à (x,y)")
+    s.add_argument("x", type=int)
+    s.add_argument("y", type=int)
+    s.add_argument("--button", default="left", choices=["left", "right", "middle"])
+    s.add_argument("--double", action="store_true")
+    s.set_defaults(func=click_cmd)
+
+    s = sub.add_parser("move", help="déplacer la souris")
+    s.add_argument("x", type=int)
+    s.add_argument("y", type=int)
+    s.set_defaults(func=move_cmd)
+
+    s = sub.add_parser("drag", help="drag-and-drop")
+    s.add_argument("x1", type=int); s.add_argument("y1", type=int)
+    s.add_argument("x2", type=int); s.add_argument("y2", type=int)
+    s.set_defaults(func=drag_cmd)
+
+    s = sub.add_parser("scroll", help="molette")
+    s.add_argument("--x", type=int); s.add_argument("--y", type=int)
+    s.add_argument("--clicks", type=int, default=-3)
+    s.set_defaults(func=scroll_cmd)
+
+    s = sub.add_parser("type", help="taper du texte")
+    s.add_argument("text")
+    s.set_defaults(func=type_cmd)
+
+    s = sub.add_parser("key", help="touche ou combo (ex: ctrl+c)")
+    s.add_argument("key")
+    s.set_defaults(func=key_cmd)
+
+    s = sub.add_parser("clipboard", help="presse-papier")
+    s.add_argument("op", choices=["get", "set"])
+    s.add_argument("text", nargs="?", default="")
+    s.set_defaults(func=clipboard_cmd)
+
+    s = sub.add_parser("ls", help="lister un dossier Windows")
+    s.add_argument("path")
+    s.set_defaults(func=ls_cmd)
+
+    s = sub.add_parser("cat", help="lire un fichier Windows")
+    s.add_argument("path")
+    s.add_argument("--binary", action="store_true")
+    s.set_defaults(func=cat_cmd)
+
+    s = sub.add_parser("write", help="écrire un fichier Windows")
+    s.add_argument("path")
+    s.add_argument("content", nargs="?")
+    s.add_argument("--from-stdin", action="store_true")
+    s.set_defaults(func=write_cmd)
+
+    s = sub.add_parser("rm", help="supprimer")
+    s.add_argument("path")
+    s.add_argument("--recursive", "-r", action="store_true")
+    s.set_defaults(func=rm_cmd)
+
+    s = sub.add_parser("mv", help="déplacer")
+    s.add_argument("src"); s.add_argument("dst")
+    s.set_defaults(func=mv_cmd)
+
+    s = sub.add_parser("cp", help="copier")
+    s.add_argument("src"); s.add_argument("dst")
+    s.set_defaults(func=cp_cmd)
+
+    s = sub.add_parser("run", help="exécuter une commande shell")
+    s.add_argument("command")
+    s.add_argument("--timeout", type=int, default=30)
+    s.set_defaults(func=run_cmd)
+
+    s = sub.add_parser("raw", help="envoyer un JSON brut")
+    s.add_argument("json")
+    s.set_defaults(func=raw_cmd)
+
+    return p
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

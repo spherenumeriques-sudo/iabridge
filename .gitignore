@@ -1,5 +1,11 @@
 *.log
-__pycache__/
 *.pyc
+__pycache__/
 .env
-agent_v2.py
+
+# Venv local du gateway (jamais committer)
+v3/gateway/venv/
+
+# Backups et caches
+*.bak
+.pytest_cache/
