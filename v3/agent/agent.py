@@ -218,6 +218,24 @@ def require(*modules: bool, name: str) -> None:
         raise RuntimeError(f"Module {name} non disponible (dépendance manquante)")
 
 
+def handle_monitors_list(params: dict[str, Any]) -> dict[str, Any]:
+    """Liste tous les écrans détectés avec leur géométrie."""
+    require(_HAS_MSS, name="monitors_list")
+    monitors = []
+    with mss.mss() as sct:
+        for idx, m in enumerate(sct.monitors):
+            label = "tous les écrans fusionnés" if idx == 0 else f"écran {idx}"
+            monitors.append({
+                "index": idx,
+                "label": label,
+                "left": m["left"],
+                "top": m["top"],
+                "width": m["width"],
+                "height": m["height"],
+            })
+    return {"status": "ok", "count": len(monitors), "monitors": monitors}
+
+
 def handle_health(params: dict[str, Any]) -> dict[str, Any]:
     info: dict[str, Any] = {
         "status": "ok",
@@ -256,6 +274,11 @@ def handle_screenshot(params: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("format must be png or jpeg")
     quality = max(1, min(95, int(params.get("quality", 80))))
     region = params.get("region")  # {"x":..., "y":..., "w":..., "h":...}
+    # monitor : 0=tous les écrans fusionnés, 1=écran principal, 2=écran secondaire, etc.
+    # "all" = équivalent à 0
+    monitor_arg = params.get("monitor", 1)
+    if monitor_arg == "all":
+        monitor_arg = 0
 
     with mss.mss() as sct:
         if region:
@@ -266,7 +289,12 @@ def handle_screenshot(params: dict[str, Any]) -> dict[str, Any]:
                 "height": int(region["h"]),
             }
         else:
-            target = sct.monitors[1]
+            try:
+                target = sct.monitors[int(monitor_arg)]
+            except IndexError:
+                raise ValueError(
+                    f"Monitor {monitor_arg} introuvable. Écrans disponibles : 0..{len(sct.monitors) - 1}"
+                )
         sct_img = sct.grab(target)
         w, h = sct_img.width, sct_img.height
         img = Image.frombytes("RGB", (w, h), sct_img.bgra, "raw", "BGRX")
@@ -1051,6 +1079,7 @@ async def handle_browser_url(params: dict[str, Any]) -> dict[str, Any]:
 HANDLERS: dict[str, Any] = {
     # Module 1 — Contrôle de base
     "health": handle_health,
+    "monitors_list": handle_monitors_list,
     "screenshot": handle_screenshot,
     "click": handle_click,
     "doubleclick": handle_doubleclick,
