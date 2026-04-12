@@ -96,6 +96,19 @@ async def amain() -> int:
     server_task = asyncio.create_task(server.serve(), name="uvicorn")
     log.info("Backend UI : http://%s:%d/", UI_HOST, UI_PORT)
 
+    # ── System tray ──────────────────────────────────────────────────────
+    tray = None
+    try:
+        from tray import TrayIcon, has_tray
+        if has_tray():
+            tray = TrayIcon(
+                on_killswitch=lambda: setattr(state, "killswitch", not state.killswitch),
+                on_quit=lambda: stop_event.set(),
+            )
+            tray.start()
+    except ImportError:
+        pass
+
     # ── Signal handlers (arrêt propre) ───────────────────────────────────
     stop_event = asyncio.Event()
 
@@ -114,6 +127,8 @@ async def amain() -> int:
         await stop_event.wait()
     finally:
         log.info("Arrêt demandé, cleanup…")
+        if tray is not None:
+            tray.stop()
         if ws_client is not None:
             await ws_client.stop()
         server.should_exit = True

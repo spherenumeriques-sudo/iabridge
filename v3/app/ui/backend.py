@@ -19,6 +19,7 @@ Tout est binded sur 127.0.0.1 — aucune exposition réseau.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from pathlib import Path
@@ -36,6 +37,89 @@ from storage import Database
 log = logging.getLogger("iabridge.backend")
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+ACTIONS_CATALOG = [
+    {
+        "module": "Contrôle",
+        "icon": "mouse-pointer",
+        "actions": [
+            {"name": "health", "label": "Statut agent", "risk": "low"},
+            {"name": "monitors_list", "label": "Lister les écrans", "risk": "low"},
+            {"name": "screenshot", "label": "Capture d'écran", "risk": "low"},
+            {"name": "click", "label": "Clic souris", "risk": "medium"},
+            {"name": "doubleclick", "label": "Double-clic", "risk": "medium"},
+            {"name": "move", "label": "Déplacer souris", "risk": "low"},
+            {"name": "drag", "label": "Glisser-déposer", "risk": "medium"},
+            {"name": "scroll", "label": "Scroll", "risk": "low"},
+            {"name": "type", "label": "Saisir du texte", "risk": "medium"},
+            {"name": "key", "label": "Touche clavier", "risk": "medium"},
+            {"name": "clipboard_get", "label": "Lire presse-papier", "risk": "low"},
+            {"name": "clipboard_set", "label": "Écrire presse-papier", "risk": "low"},
+        ],
+    },
+    {
+        "module": "Fichiers",
+        "icon": "folder",
+        "actions": [
+            {"name": "list_dir", "label": "Lister un dossier", "risk": "low"},
+            {"name": "read_file", "label": "Lire un fichier", "risk": "low"},
+            {"name": "write_file", "label": "Écrire un fichier", "risk": "high"},
+            {"name": "delete", "label": "Supprimer", "risk": "high"},
+            {"name": "fs_move", "label": "Déplacer / renommer", "risk": "high"},
+            {"name": "copy", "label": "Copier", "risk": "medium"},
+            {"name": "run", "label": "Exécuter commande", "risk": "high"},
+        ],
+    },
+    {
+        "module": "Système",
+        "icon": "cpu",
+        "actions": [
+            {"name": "sys_info", "label": "Infos système", "risk": "low"},
+            {"name": "processes", "label": "Lister processus", "risk": "low"},
+            {"name": "kill_process", "label": "Tuer un processus", "risk": "high"},
+            {"name": "windows_list", "label": "Lister fenêtres", "risk": "low"},
+            {"name": "focus_window", "label": "Focus fenêtre", "risk": "low"},
+            {"name": "minimize_window", "label": "Minimiser fenêtre", "risk": "low"},
+            {"name": "close_window", "label": "Fermer fenêtre", "risk": "medium"},
+        ],
+    },
+    {
+        "module": "Nettoyage",
+        "icon": "trash-2",
+        "actions": [
+            {"name": "clean_temp", "label": "Nettoyer fichiers temp", "risk": "high"},
+            {"name": "clean_recycle_bin", "label": "Vider corbeille", "risk": "high"},
+            {"name": "startup_list", "label": "Apps au démarrage", "risk": "low"},
+            {"name": "winget", "label": "Gérer paquets (winget)", "risk": "high"},
+            {"name": "services", "label": "Services Windows", "risk": "high"},
+        ],
+    },
+    {
+        "module": "Divers",
+        "icon": "globe",
+        "actions": [
+            {"name": "open_url", "label": "Ouvrir une URL", "risk": "low"},
+            {"name": "notify", "label": "Notification Windows", "risk": "low"},
+        ],
+    },
+    {
+        "module": "Navigateur",
+        "icon": "chrome",
+        "actions": [
+            {"name": "browser_open", "label": "Ouvrir navigateur", "risk": "medium"},
+            {"name": "browser_goto", "label": "Naviguer vers URL", "risk": "medium"},
+            {"name": "browser_click", "label": "Cliquer (navigateur)", "risk": "medium"},
+            {"name": "browser_fill", "label": "Remplir champ", "risk": "medium"},
+            {"name": "browser_wait", "label": "Attendre sélecteur", "risk": "low"},
+            {"name": "browser_extract", "label": "Extraire contenu", "risk": "low"},
+            {"name": "browser_screenshot", "label": "Screenshot page", "risk": "low"},
+            {"name": "browser_script", "label": "Exécuter JS", "risk": "high"},
+            {"name": "browser_press", "label": "Touche (navigateur)", "risk": "medium"},
+            {"name": "browser_close", "label": "Fermer navigateur", "risk": "low"},
+            {"name": "browser_url", "label": "URL courante", "risk": "low"},
+        ],
+    },
+]
 
 
 def create_app(state: AppState, db: Database) -> FastAPI:
@@ -135,6 +219,70 @@ def create_app(state: AppState, db: Database) -> FastAPI:
             raise HTTPException(status_code=400, detail="body must have 'key' field")
         await db.set_setting(body["key"], body.get("value"))
         return {"ok": True}
+
+    @app.get("/api/actions-catalog")
+    async def api_actions_catalog() -> dict[str, Any]:
+        """Catalogue de toutes les actions connues, classées par module."""
+        return {"modules": ACTIONS_CATALOG}
+
+    @app.get("/api/monitoring")
+    async def api_monitoring() -> dict[str, Any]:
+        """Métriques système live (CPU, RAM, disque) — nécessite psutil."""
+        try:
+            import psutil
+            cpu = psutil.cpu_percent(interval=0.1, percpu=True)
+            mem = psutil.virtual_memory()
+            disk = psutil.disk_usage("/")
+            net = psutil.net_io_counters()
+            return {
+                "available": True,
+                "cpu": {"per_core": cpu, "avg": sum(cpu) / len(cpu) if cpu else 0},
+                "memory": {
+                    "total_gb": round(mem.total / 1e9, 2),
+                    "used_gb": round(mem.used / 1e9, 2),
+                    "percent": mem.percent,
+                },
+                "disk": {
+                    "total_gb": round(disk.total / 1e9, 2),
+                    "used_gb": round(disk.used / 1e9, 2),
+                    "percent": round(disk.percent, 1),
+                },
+                "network": {
+                    "sent_mb": round(net.bytes_sent / 1e6, 1),
+                    "recv_mb": round(net.bytes_recv / 1e6, 1),
+                },
+            }
+        except ImportError:
+            return {"available": False, "reason": "psutil non installé"}
+
+    @app.get("/api/export-actions")
+    async def api_export_actions(
+        fmt: str = "json",
+        action: str | None = None,
+        status: str | None = None,
+    ) -> Any:
+        rows = await db.list_actions(
+            limit=10000,
+            action_filter=action,
+            status_filter=status,
+        )
+        if fmt == "csv":
+            import csv
+            import io
+            out = io.StringIO()
+            if rows:
+                w = csv.DictWriter(out, fieldnames=rows[0].keys())
+                w.writeheader()
+                for r in rows:
+                    flat = {k: (json.dumps(v) if isinstance(v, (dict, list)) else v) for k, v in r.items()}
+                    w.writerow(flat)
+            from starlette.responses import Response
+            return Response(
+                content=out.getvalue(),
+                media_type="text/csv",
+                headers={"Content-Disposition": "attachment; filename=iabridge_history.csv"},
+            )
+        return {"actions": rows}
 
     # ── Static files ──────────────────────────────────────────────────────
     # Le dashboard HTML est à la racine /
