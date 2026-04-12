@@ -125,12 +125,17 @@ def run_with_window(
     window.events.closed += _on_closed
 
     # webview.start() est bloquant jusqu'à fermeture de la fenêtre.
-    # gui='edgechromium' sur Windows force WebView2 (meilleur rendu que IE).
     try:
         webview.start(gui="edgechromium" if _is_windows() else None)
     except Exception as e:
-        log.warning("webview.start() erreur (%s), fallback auto", e)
-        webview.start()
+        log.warning("webview.start() erreur (%s), fallback navigateur", e)
+        # pywebview inutilisable (pythonnet manquant sur Python 3.14+)
+        # → on ouvre le dashboard dans le navigateur par défaut
+        import webbrowser
+        webbrowser.open(url)
+        log.info("Dashboard ouvert dans le navigateur : %s", url)
+        # Attendre que le thread asyncio se termine
+        t.join()
 
     # Fenêtre fermée → attendre que le thread asyncio se termine
     t.join(timeout=5)
