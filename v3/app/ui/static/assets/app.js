@@ -23,13 +23,38 @@ document.querySelectorAll('.nav-item').forEach(btn => {
   });
 });
 
-// ── Killswitch ───────────────────────────────────────────────────
+// ── Killswitch + Panic ───────────────────────────────────────────
 
 const killBtn = document.getElementById('killswitch-btn');
+let lastKillClick = 0;
+
 killBtn.addEventListener('click', async () => {
+  const now = Date.now();
   const active = killBtn.classList.contains('active');
-  if (!active && !confirm('Activer le KILLSWITCH ?\nToutes les commandes seront bloquées.')) return;
-  await post('/api/killswitch', { enable: !active });
+
+  if (active) {
+    // Désactiver killswitch + panic
+    await post('/api/killswitch', { enable: false });
+    await post('/api/panic', { enable: false });
+    refresh();
+    return;
+  }
+
+  // Premier clic = killswitch. Double-clic rapide (< 800ms) = panic
+  if (now - lastKillClick < 800) {
+    // Double-clic → PANIC MODE
+    if (confirm('⚠️ PANIC MODE ⚠️\n\nCeci va :\n• Bloquer toutes les commandes\n• Fermer le navigateur piloté\n• Tuer les processus enfants\n• Verrouiller le PC\n\nConfirmer ?')) {
+      await post('/api/panic', { enable: true });
+      refresh();
+    }
+    lastKillClick = 0;
+    return;
+  }
+
+  // Premier clic → killswitch simple
+  lastKillClick = now;
+  if (!confirm('Activer le KILLSWITCH ?\nToutes les commandes seront bloquées.\n\n(Double-clic rapide = PANIC MODE)')) return;
+  await post('/api/killswitch', { enable: true });
   refresh();
 });
 

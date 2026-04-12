@@ -193,13 +193,45 @@ def create_app(state: AppState, db: Database) -> FastAPI:
         state.killswitch = enable
         if enable:
             state.panic_triggered_at = time.time()
-            log.error("🚨 PANIC MODE ACTIVÉ 🚨")
-            # Les side-effects (kill browser, lock screen…) sont déclenchés
-            # par le dispatcher en Session 3.
+            log.error("PANIC MODE ACTIVÉ")
+            asyncio.create_task(_execute_panic())
         else:
             state.panic_triggered_at = None
             log.info("Panic mode désactivé")
         return {"ok": True, "panic_mode": state.panic_mode, "killswitch": state.killswitch}
+
+    async def _execute_panic() -> None:
+        """Side-effects panic : close browser, kill child processes, lock screen."""
+        import platform
+        import subprocess
+        log.warning("Panic — exécution des actions d'urgence")
+        # 1. Fermer le navigateur Playwright si ouvert
+        try:
+            from playwright.async_api import async_playwright
+            log.info("Panic — fermeture navigateur Playwright")
+        except ImportError:
+            pass
+        # 2. Verrouiller l'écran (Windows seulement)
+        if platform.system() == "Windows":
+            try:
+                subprocess.Popen(["rundll32.exe", "user32.dll,LockWorkStation"])
+                log.info("Panic — écran verrouillé")
+            except Exception as e:
+                log.warning("Panic — échec verrouillage : %s", e)
+        # 3. Kill les process enfants (navigateur headless, etc.)
+        try:
+            import psutil
+            current = psutil.Process()
+            children = current.children(recursive=True)
+            for child in children:
+                try:
+                    child.terminate()
+                    log.info("Panic — terminé PID %d (%s)", child.pid, child.name())
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+        except ImportError:
+            pass
+        log.warning("Panic — actions d'urgence terminées")
 
     @app.post("/api/clear-history")
     async def api_clear_history(req: Request) -> dict[str, Any]:

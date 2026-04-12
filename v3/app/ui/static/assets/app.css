@@ -618,4 +618,119 @@ body::after {
 ::-webkit-scrollbar-thumb { background: var(--bg-3); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: rgba(0, 212, 255, 0.2); }
 
+/* ── Polish — effets modernes ──────────────────────────────────── */
+
+/* Noise texture sur le fond */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+  pointer-events: none;
+  z-index: 0;
+  mix-blend-mode: overlay;
+}
+
+/* Animated gradient border pour les stat cards au hover */
+.stat:hover::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: var(--radius);
+  padding: 1px;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2), var(--accent));
+  background-size: 300% 300%;
+  animation: border-flow 3s ease infinite;
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  z-index: -1;
+}
+@keyframes border-flow {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
+
+/* Connexion ring animation (dotation du dot online) */
+.dot.online::after {
+  content: "";
+  position: absolute;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  border: 1.5px solid var(--ok);
+  animation: ring-expand 2s ease-out infinite;
+}
+@keyframes ring-expand {
+  0% { transform: scale(1); opacity: 0.7; }
+  100% { transform: scale(3); opacity: 0; }
+}
+
+/* Topbar dot needs relative position for the ring */
+.dot { position: relative; }
+
+/* Ligne de scan horizontale subtile (Armoury Crate style) */
+@keyframes scanline {
+  0% { top: -2px; }
+  100% { top: calc(100% + 2px); }
+}
+.sidebar::before {
+  content: "";
+  position: absolute;
+  left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  opacity: 0.1;
+  animation: scanline 8s linear infinite;
+  z-index: 10;
+  pointer-events: none;
+}
+
+/* Hover glow sur les lignes de table */
+.data-table tbody tr:hover {
+  background: linear-gradient(90deg, rgba(0, 212, 255, 0.04), transparent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+/* Card hover lift */
+.card {
+  transform: translateY(0);
+}
+.card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3), 0 0 24px rgba(0, 212, 255, 0.06);
+}
+
+/* Brand icon bounce subtile */
+.brand-icon svg {
+  animation: float 6s ease-in-out infinite;
+}
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-3px); }
+}
+
+/* Typing cursor dans les stat-value */
+.stat-value {
+  text-shadow: 0 0 20px rgba(0, 212, 255, 0.15);
+}
+
+/* Perm toggle hover */
+.perm-toggle button:hover {
+  transform: scale(1.05);
+}
+
+/* Alert banner quand panic */
+.panic-banner {
+  position: fixed;
+  top: 0; left: var(--sidebar-w); right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, var(--err), transparent, var(--err));
+  animation: panic-slide 1s linear infinite;
+  z-index: 50;
+}
+@keyframes panic-slide {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
 .hidden { display: none !important; }
