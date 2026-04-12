@@ -86,8 +86,15 @@ class AgentConnection:
             self.connected_at = time.time()
             log.info("Agent connecté : %s", info)
 
-    async def detach(self) -> None:
+    async def detach(self, ws: WebSocket | None = None) -> None:
+        """Détache le ws donné. Si `ws` est fourni et ne correspond pas
+        au ws courant, c'est qu'un autre agent a déjà pris la place —
+        on ne touche à rien (évite la race condition où la coroutine
+        d'un ancien agent efface le nouveau)."""
         async with self.lock:
+            if ws is not None and self.ws is not ws:
+                log.info("detach ignoré : ws déjà remplacé par un nouvel agent")
+                return
             self.ws = None
             self.info = {}
             self.connected_at = None
@@ -215,7 +222,7 @@ async def websocket_endpoint(ws: WebSocket) -> None:
     except Exception as e:
         log.exception("Erreur WebSocket : %s", e)
     finally:
-        await agent.detach()
+        await agent.detach(ws)
 
 
 if __name__ == "__main__":
