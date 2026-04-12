@@ -1,0 +1,10 @@
+aiosqlite>=0.19
+fastapi>=0.110
+uvicorn>=0.29
+websockets>=12
+# Dépendances optionnelles installées côté Windows seulement :
+# pywebview>=5.0
+# pystray>=0.19
+# pillow>=10
+# psutil>=5.9
+# pyautogui, mss, pyperclip, pywin32, playwright
