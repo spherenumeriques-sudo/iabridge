@@ -124,10 +124,35 @@ async def amain() -> int:
 
 
 def main() -> int:
+    # Mode fenêtre native si pywebview est installé et qu'on n'est pas en
+    # headless explicite. Sur VPS Linux sans display, pywebview manquera
+    # → fallback auto sur le mode headless HTTP pur.
+    headless = "--headless" in sys.argv or not _should_use_window()
+    if headless:
+        try:
+            return asyncio.run(amain())
+        except KeyboardInterrupt:
+            return 0
+    # Mode fenêtre native : asyncio dans un thread, webview sur le main
+    from window import run_with_window
     try:
-        return asyncio.run(amain())
+        return run_with_window(amain, title="IABridge", url=f"http://{UI_HOST}:{UI_PORT}/")
     except KeyboardInterrupt:
         return 0
+
+
+def _should_use_window() -> bool:
+    """True si pywebview est installé ET qu'on a probablement un display."""
+    from window import has_webview
+    if not has_webview():
+        return False
+    # Sur Linux, vérif DISPLAY/WAYLAND_DISPLAY — sinon headless
+    import platform
+    if platform.system() == "Linux":
+        import os
+        if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+            return False
+    return True
 
 
 if __name__ == "__main__":
